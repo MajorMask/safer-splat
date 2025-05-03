@@ -1,0 +1,48 @@
+Collecting git+https://github.com/nerfstudio-project/gsplat.git
+  Cloning https://github.com/nerfstudio-project/gsplat.git to /tmp/pip-req-build-oprsteeg
+  Running command git clone --filter=blob:none --quiet https://github.com/nerfstudio-project/gsplat.git /tmp/pip-req-build-oprsteeg
+  Resolved https://github.com/nerfstudio-project/gsplat.git to commit 634942868741c99bd3286932aea412ab7e91cd30
+  Running command git submodule update --init --recursive -q
+  Preparing metadata (setup.py): started
+  Preparing metadata (setup.py): finished with status 'done'
+Requirement already satisfied: ninja in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from gsplat==1.5.1) (1.11.1.4)
+Requirement already satisfied: numpy in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from gsplat==1.5.1) (2.2.5)
+Collecting jaxtyping (from gsplat==1.5.1)
+  Using cached jaxtyping-0.3.2-py3-none-any.whl.metadata (7.0 kB)
+Collecting rich>=12 (from gsplat==1.5.1)
+  Using cached rich-14.0.0-py3-none-any.whl.metadata (18 kB)
+Requirement already satisfied: torch in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from gsplat==1.5.1) (2.1.2+cu118)
+Collecting markdown-it-py>=2.2.0 (from rich>=12->gsplat==1.5.1)
+  Using cached markdown_it_py-3.0.0-py3-none-any.whl.metadata (6.9 kB)
+Collecting pygments<3.0.0,>=2.13.0 (from rich>=12->gsplat==1.5.1)
+  Using cached pygments-2.19.1-py3-none-any.whl.metadata (2.5 kB)
+Requirement already satisfied: typing-extensions<5.0,>=4.0.0 in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from rich>=12->gsplat==1.5.1) (4.13.2)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=12->gsplat==1.5.1)
+  Using cached mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Collecting wadler-lindig>=0.1.3 (from jaxtyping->gsplat==1.5.1)
+  Using cached wadler_lindig-0.1.5-py3-none-any.whl.metadata (17 kB)
+Requirement already satisfied: filelock in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (3.18.0)
+Requirement already satisfied: sympy in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (1.14.0)
+Requirement already satisfied: networkx in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (3.4.2)
+Requirement already satisfied: jinja2 in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (3.1.6)
+Requirement already satisfied: fsspec in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (2025.3.2)
+Requirement already satisfied: triton==2.1.0 in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from torch->gsplat==1.5.1) (2.1.0)
+Requirement already satisfied: MarkupSafe>=2.0 in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from jinja2->torch->gsplat==1.5.1) (3.0.2)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in /home/manan/miniconda3/envs/nerfbridge/lib/python3.10/site-packages (from sympy->torch->gsplat==1.5.1) (1.3.0)
+Using cached rich-14.0.0-py3-none-any.whl (243 kB)
+Using cached pygments-2.19.1-py3-none-any.whl (1.2 MB)
+Using cached markdown_it_py-3.0.0-py3-none-any.whl (87 kB)
+Using cached mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Using cached jaxtyping-0.3.2-py3-none-any.whl (55 kB)
+Using cached wadler_lindig-0.1.5-py3-none-any.whl (20 kB)
+Building wheels for collected packages: gsplat
+  DEPRECATION: Building 'gsplat' using the legacy setup.py bdist_wheel mechanism, which will be removed in a future version. pip 25.3 will enforce this behaviour change. A possible replacement is to use the standardized build interface by setting the `--use-pep517` option, (possibly combined with `--no-build-isolation`), or adding a `pyproject.toml` file to the source tree of 'gsplat'. Discussion can be found at https://github.com/pypa/pip/issues/6334
+  Building wheel for gsplat (setup.py): started
+  Building wheel for gsplat (setup.py): still running...
+  Building wheel for gsplat (setup.py): finished with status 'done'
+  Created wheel for gsplat: filename=gsplat-1.5.1-cp310-cp310-linux_x86_64.whl size=9942183 sha256=e16b0c81180214753af31ac4c474226d123017cb194b729a9d2b7bacbb60dd92
+  Stored in directory: /tmp/pip-ephem-wheel-cache-biasgi0l/wheels/26/56/4f/69688e91fd234ec9802d2dd32872ee38b6b2d67d04763af2e1
+Successfully built gsplat
+Installing collected packages: wadler-lindig, pygments, mdurl, markdown-it-py, jaxtyping, rich, gsplat
+
+Successfully installed gsplat-1.5.1 jaxtyping-0.3.2 markdown-it-py-3.0.0 mdurl-0.1.2 pygments-2.19.1 rich-14.0.0 wadler-lindig-0.1.5

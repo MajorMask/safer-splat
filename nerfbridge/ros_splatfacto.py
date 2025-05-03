@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Type, List, Dict
+from filterpy.kalman import KalmanFilter
+import cvxpy as cp
+
 
 from nerfbridge.distances import (
     distance_point_ellipsoid,
@@ -57,7 +60,9 @@ class ROSSplatfactoModelConfig(SplatfactoModelConfig):
     """ Pointcloud minimum seed distance. """
     max_distance: float = 5.0
     """ Pointcloud maximum seed distance. """
-
+    enable_dynamic_ellipsoids: bool = True  # Enable dynamic ellipsoids
+    dynamic_update_freq: float = 0.5  # Frequency to update ellipsoids (in seconds)
+    max_dynamic_objects: int = 50  # Maximum number of dynamic objects
 
 class ROSSplatfactoModel(SplatfactoModel):
     def __init__(self, *args, **kwargs):
@@ -66,6 +71,7 @@ class ROSSplatfactoModel(SplatfactoModel):
         self.depth_seed_pts = self.config.depth_seed_pts
         self.seed_with_depth = self.config.seed_with_depth
         self.seed_with_pc = self.config.seed_with_pc
+        self.dynamic_objects_kf = []  # List of Kalman filters for dynamic objects
 
         assert not (
             self.seed_with_depth and self.seed_with_pc
@@ -94,6 +100,54 @@ class ROSSplatfactoModel(SplatfactoModel):
         super().populate_modules()
         # Move the initial means far awawy (THIS IS A HACK AND SHOULD BE FIXED)
         self.gauss_params["means"] = self.gauss_params["means"] + 100.0
+
+    def initialize_kalman_filter(self, position, velocity):
+        """
+        Initialize a Kalman filter for a dynamic object.
+        Args:
+            position (torch.Tensor): Initial position of the object.
+            velocity (torch.Tensor): Initial velocity of the object.
+        Returns:
+            KalmanFilter: Initialized Kalman filter.
+        """
+        kf = KalmanFilter(dim_x=6, dim_z=3)
+        kf.x[:3] = position.cpu().numpy()  # Initial position
+        kf.x[3:] = velocity.cpu().numpy()  # Initial velocity
+        kf.F = np.array([[1, 0, 0, 1, 0, 0],  # State transition matrix
+                         [0, 1, 0, 0, 1, 0],
+                         [0, 0, 1, 0, 0, 1],
+                         [0, 0, 0, 1, 0, 0],
+                         [0, 0, 0, 0, 1, 0],
+                         [0, 0, 0, 0, 0, 1]])
+        kf.H = np.array([[1, 0, 0, 0, 0, 0],  # Measurement matrix
+                         [0, 1, 0, 0, 0, 0],
+                         [0, 0, 1, 0, 0, 0]])
+        kf.P *= 10  # Initial uncertainty
+        kf.R *= 1  # Measurement noise
+        kf.Q *= 0.01  # Process noise
+        return kf
+
+    def update_dynamic_objects(self, detected_objects):
+        """
+        Update the Kalman filters for dynamic objects.
+        Args:
+            detected_objects (List[Dict]): List of detected objects with positions and velocities.
+        """
+        # Initialize Kalman filters for new objects
+        if len(self.dynamic_objects_kf) == 0:
+            for obj in detected_objects:
+                kf = self.initialize_kalman_filter(obj["position"], obj["velocity"])
+                self.dynamic_objects_kf.append(kf)
+
+        # Update existing Kalman filters
+        for kf, obj in zip(self.dynamic_objects_kf, detected_objects):
+            kf.predict()
+            kf.update(obj["position"].cpu().numpy())
+
+        # Update positions and velocities
+        for kf, obj in zip(self.dynamic_objects_kf, detected_objects):
+            obj["position"] = torch.tensor(kf.x[:3], device=self.device)
+            obj["velocity"] = torch.tensor(kf.x[3:], device=self.device)
 
     def seed_cb(self, pipeline: Pipeline, optimizers: Optimizers, step: int):
         ds_latest_idx = pipeline.datamanager.train_image_dataloader.buffered_idx
@@ -240,6 +294,7 @@ class ROSSplatfactoModel(SplatfactoModel):
         self.gauss_params["features_rest"] = torch.nn.Parameter(
             torch.cat([self.features_rest.detach(), features_rest], dim=0)
         )
+
 
         # Add the new parameters to the optimizer.
         for param_group, new_param in self.get_gaussian_param_groups().items():
@@ -409,9 +464,50 @@ class ROSSplatfactoModel(SplatfactoModel):
             optimizer.state[new_param[0]] = param_state
             optimizer.param_groups[0]["params"] = new_param
             del old_param
+    
+    """
+    Detect moving objects using depth and pose data.
+    Args:
+        depth_data (torch.Tensor): Depth image.
+        pose_data (torch.Tensor): Current pose of the camera.
+        prev_pose_data (torch.Tensor): Previous pose of the camera.
+    Returns:
+        List[Dict]: List of detected moving objects with positions and velocities.
+    """
+    def detect_moving_objects(self, depth_data, pose_data, prev_pose_data):
+
+        # Compute relative motion between current and previous poses
+        relative_motion = pose_data[:3, 3] - prev_pose_data[:3, 3]
+
+        # Extract 3D points from depth data
+        nz_row, nz_col = torch.where(depth_data > 0)
+        z = depth_data[nz_row, nz_col]
+        x = (nz_col - self.config.cx) * z / self.config.fx
+        y = (nz_row - self.config.cy) * z / self.config.fy
+        points_3d = torch.stack([x, y, z], dim=-1)
+
+        # Transform points to world coordinates
+        points_world = torch.matmul(points_3d, pose_data[:3, :3].T) + pose_data[:3, 3]
+
+        # Compute velocities (approximation using relative motion)
+        velocities = relative_motion.unsqueeze(0).repeat(points_world.shape[0], 1)
+
+        # Filter dynamic objects based on velocity threshold
+        velocity_magnitude = torch.norm(velocities, dim=1)
+        dynamic_mask = velocity_magnitude > self.config.dynamic_velocity_threshold
+
+        dynamic_objects = []
+        for point, velocity in zip(points_world[dynamic_mask], velocities[dynamic_mask]):
+            dynamic_objects.append({"position": point, "velocity": velocity})
+
+        return dynamic_objects
 
     def cbf(self, u_des, state):
         # lets access the gaussian parameters
+  # Dynamically adjust alpha and beta based on the system's state
+        velocity_norm = torch.norm(state[3:6])
+        self.alpha = 5 + 2 * velocity_norm  # Example: Increase alpha with velocity
+        self.beta = 5 + 1 * velocity_norm  # Example: Increase beta with velocity
 
         # self.gauss_params["means"]
         tnow = time.time()
@@ -469,7 +565,7 @@ class ROSSplatfactoModel(SplatfactoModel):
     # NOTE: Need to provide the robot radius OR the robot R and S matrices
     def query_distance(
         self, x, distance_type=None, radius=0.0, R_robot=None, S_robot=None, epsilon=0.0
-    ):
+   , dynamic_objects=None ):
         # Queries varieties of distance from x to the GSplat.
         if self.means_copy is None:
             return
@@ -486,6 +582,18 @@ class ROSSplatfactoModel(SplatfactoModel):
                 CONSOLE.rule(f"[bold orange]Re-clone FAILED!")
                 self.locked = False
                 return None, None, None
+        # FISHY
+        if dynamic_objects:
+            for obj in dynamic_objects:
+                position = obj["position"]
+                velocity = obj["velocity"]
+
+                # Add Gaussian parameters for the dynamic object
+                self.gauss_params["means"] = torch.cat([self.gauss_params["means"], position.unsqueeze(0)], dim=0)
+                self.gauss_params["scales"] = torch.cat([self.gauss_params["scales"], torch.log(torch.tensor([0.5, 0.5, 0.5]))], dim=0)
+                self.gauss_params["quats"] = torch.cat([self.gauss_params["quats"], random_quat_tensor(1).to(self.device)], dim=0)
+                self.gauss_params["opacities"] = torch.cat([self.gauss_params["opacities"], torch.logit(torch.tensor([0.3]))], dim=0)
+
 
         means = self.means_copy
         rots = self.rots_copy
@@ -589,12 +697,23 @@ class ROSSplatfactoModel(SplatfactoModel):
         return h, grad_h, hess_h, info
 
     # TODO: This function assumes relative degree 2, we should make it account for single-integrator dynamics too.
-    def get_QP_matrices(self, x, u_des, h, grad_h, hes_h, minimal=True):
+    def get_QP_matrices(self, x, u_des, h, grad_h, hes_h, dynamic_objects = None, minimal=True):
         # Computes the A and b matrices for the QP A u <= b
         tnow = time.time()
         # h, grad_h, hes_h, info = self.gsplat.query_distance(x[..., :3], radius=self.radius)       # can pass in an optional argument for a radius
         # print('Time to query distance:', time.time() - tnow)
+        if dynamic_objects:
+            for obj in dynamic_objects:
+                position = obj["position"]
+                velocity = obj["velocity"]
 
+            # Compute dynamic constraints
+                dynamic_h, dynamic_grad_h, dynamic_hess_h = self.compute_dynamic_constraints(position, velocity)
+
+                # Append dynamic constraints to QP matrices
+                h = torch.cat([h, dynamic_h], dim=0)
+                grad_h = torch.cat([grad_h, dynamic_grad_h], dim=0)
+                hes_h = torch.cat([hes_h, dynamic_hess_h], dim=0)
         h = h.unsqueeze(-1)
         grad_h = torch.cat(
             (grad_h, torch.zeros(h.shape[0], 3).to(grad_h.device)), dim=-1
@@ -711,6 +830,22 @@ class ROSSplatfactoModel(SplatfactoModel):
 
     #     return u_out
 
+    def compute_dynamic_constraints(self, position, velocity):
+        """
+        Compute constraints for a dynamic object.
+        Args:
+            position (torch.Tensor): Position of the dynamic object.
+            velocity (torch.Tensor): Velocity of the dynamic object.
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: h, grad_h, hess_h for the dynamic object.
+        """
+        # Example: Use a simple distance-based constraint
+        h = torch.norm(position - self.robot_position) - self.dynamic_radius
+        grad_h = 2 * (position - self.robot_position)
+        hess_h = 2 * torch.eye(3)
+
+        return h.unsqueeze(0), grad_h.unsqueeze(0), hess_h.unsqueeze(0)
+
     # Clarabel is a more robust, faster solver
     def optimize_QP_clarabel(self, A, l, P, q):
         n_constraints = A.shape[0]
@@ -727,19 +862,49 @@ class ROSSplatfactoModel(SplatfactoModel):
         )
         sol = solver.solve()
 
-        # Check solver status
+    # Check solver status
         if str(sol.status) != "Solved":
-            # print(f"Solver status: {sol.status}")
-            # print(f"Number of iterations: {sol.iterations}")
-            # print('Clarabel did not solve the problem!')
-            solver_success = False
-            solution = None
+            print("Clarabel failed. Falling back to CVXPY.")
+            # Fallback to CVXPY
+            u = cp.Variable(3)
+            objective = cp.Minimize(0.5 * cp.quad_form(u, P) + q.T @ u)
+            constraints = [A @ u <= l]
+            prob = cp.Problem(objective, constraints)
+            try:
+                prob.solve()
+                if prob.status in ["optimal", "optimal_inaccurate"]:
+                    return u.value, True
+                else:
+                    return None, False
+            except Exception as e:
+                print(f"CVXPY failed: {e}")
+                return None, False
         else:
-            solver_success = True
-            solution = sol.x
+            return sol.x, True
 
-        return solution, solver_success
+# FISHY
+    def training_step(self, pipeline, optimizers, step):
+    
+        # Detect moving objects
+        dynamic_objects = self.detect_moving_objects(
+            depth_data=pipeline.datamanager.train_dataset.depth_image,
+            pose_data=pipeline.datamanager.train_dataset.pose,
+            prev_pose_data=pipeline.datamanager.train_dataset.prev_pose,
+        )
 
+        # Query distances and add dynamic ellipsoids
+        h, grad_h, hess_h, info = self.query_distance(
+            x=self.robot_state, dynamic_objects=dynamic_objects)
+
+        # Update QP constraints
+        A, l, P, q = self.get_QP_matrices(
+            x=self.robot_state, u_des=self.desired_control, h=h, grad_h=grad_h, hes_h=hess_h, dynamic_objects=dynamic_objects
+        )
+
+        # Solve QP and update control
+        u_out, success_flag = self.optimize_QP_clarabel(A, l, P, q)
+        self.update_control(u_out)
+   
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
